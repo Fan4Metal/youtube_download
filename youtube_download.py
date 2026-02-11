@@ -5,6 +5,18 @@ from datetime import datetime
 import yt_dlp
 
 
+class Colors:
+    """ANSI цветовые коды"""
+
+    GREEN = "\033[92m"
+    RED = "\033[91m"
+    YELLOW = "\033[93m"
+    CYAN = "\033[96m"
+    WHITE = "\033[97m"
+    RESET = "\033[0m"
+    BOLD = "\033[1m"
+
+
 def download_mp3(links_file: str, concurrent_fragments: int = 10, out_dir: str = ".", bitrate: int = 192):
     errors = 0
     ok = 0
@@ -12,7 +24,7 @@ def download_mp3(links_file: str, concurrent_fragments: int = 10, out_dir: str =
     last_filename = ""  # что сейчас качаем
 
     def hook(d):
-        nonlocal last_filename
+        nonlocal last_filename, dublicates, file_names
 
         status = d.get("status")
 
@@ -32,6 +44,11 @@ def download_mp3(links_file: str, concurrent_fragments: int = 10, out_dir: str =
             print()  # перенос строки после прогресса
             base, _ext = os.path.splitext(d.get("filename") or last_filename)
             final_mp3 = os.path.basename(base + ".mp3")
+            if final_mp3 in file_names:
+                print(f"{Colors.YELLOW}{final_mp3} - дубликат{Colors.RESET}", end="", flush=True)
+                dublicates.append(final_mp3)
+                return
+            file_names.add(final_mp3)
             print(f"{final_mp3}", end="", flush=True)
 
     ydl_opts = {
@@ -59,6 +76,8 @@ def download_mp3(links_file: str, concurrent_fragments: int = 10, out_dir: str =
     print(f"Скачиваю {total} аудиофайлов...")
     os.makedirs(out_dir, exist_ok=True)
 
+    file_names = set()
+    dublicates = []
     for i, url in enumerate(urls, 1):
         print(f"\n[{i}/{total}] {url}")
 
@@ -72,7 +91,9 @@ def download_mp3(links_file: str, concurrent_fragments: int = 10, out_dir: str =
         else:
             errors += 1
 
-    print(f"\nГотово! Успешно: {ok}, Ошибок: {errors}")
+    print(
+        f"\nГотово! Успешно: {Colors.GREEN}{ok}{Colors.RESET}, Ошибок: {Colors.RED}{errors}{Colors.RESET}, Дубликаты: {Colors.YELLOW}{len(dublicates)}{Colors.RESET}"
+    )
 
 
 if __name__ == "__main__":
