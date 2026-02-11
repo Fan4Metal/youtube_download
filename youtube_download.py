@@ -73,6 +73,9 @@ def download_mp3(links_file: str, concurrent_fragments: int = 10, out_dir: str =
         urls = [line.strip() for line in f if line.strip().startswith(("http://", "https://"))]
 
     total = len(urls)
+    print("Скрипт загрузки аудиофайлов с Youtube")
+    print("=" * 80)
+    print("Файл с ссылками:", links_file)
     print(f"Скачиваю {total} аудиофайлов...")
     os.makedirs(out_dir, exist_ok=True)
 
@@ -93,6 +96,7 @@ def download_mp3(links_file: str, concurrent_fragments: int = 10, out_dir: str =
 
     print(
         f"\nГотово! Успешно: {Colors.GREEN}{ok}{Colors.RESET}, Ошибок: {Colors.RED}{errors}{Colors.RESET}, Дубликаты: {Colors.YELLOW}{len(dublicates)}{Colors.RESET}"
+        f"\nФайлы загружены в {os.path.abspath(out_dir)}"
     )
 
 
