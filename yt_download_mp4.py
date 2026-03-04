@@ -1,3 +1,9 @@
+# /// script
+# dependencies = [
+#     "yt-dlp>=2025.12.8",
+# ]
+# ///
+
 import os
 import subprocess
 import sys
@@ -84,7 +90,6 @@ def download_mp4(links_file: str, concurrent_fragments: int = 10, out_dir: str =
         urls = [line.strip() for line in f if line.strip().startswith(("http://", "https://"))]
 
     total = len(urls)
-    print("Скрипт загрузки видео с YouTube")
     print("=" * 80)
     print("Файл с ссылками:", links_file)
     print(f"Скачиваю {total} видеофайлов...")
@@ -115,7 +120,8 @@ def download_mp4(links_file: str, concurrent_fragments: int = 10, out_dir: str =
 
 
 if __name__ == "__main__":
-    file_to_download = "links_mp4.txt"
+    print("Скрипт загрузки видео с YouTube")
+    file_to_download = input("Введите имя файла с ссылками (links.txt): ") or "links.txt"
     if not os.path.exists(file_to_download):
         print(f"Файл с ссылками не найден: {file_to_download}")
         sys.exit(1)

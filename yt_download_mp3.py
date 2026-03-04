@@ -1,3 +1,9 @@
+# /// script
+# dependencies = [
+#     "yt-dlp>=2025.12.8",
+# ]
+# ///
+
 import os
 import subprocess
 import sys
@@ -74,7 +80,6 @@ def download_mp3(links_file: str, concurrent_fragments: int = 10, out_dir: str =
         urls = [line.strip() for line in f if line.strip().startswith(("http://", "https://"))]
 
     total = len(urls)
-    print("Скрипт загрузки аудиофайлов с Youtube")
     print("=" * 80)
     print("Файл с ссылками:", links_file)
     print(f"Скачиваю {total} аудиофайлов...")
@@ -102,7 +107,8 @@ def download_mp3(links_file: str, concurrent_fragments: int = 10, out_dir: str =
 
 
 if __name__ == "__main__":
-    file_to_download = "links_mp3.txt"
+    print("Скрипт загрузки аудиофайлов с Youtube")
+    file_to_download = input("Введите имя файла с ссылками (links.txt): ") or "links.txt"
     if not os.path.exists(file_to_download):
         print(f"Файл с ссылками не найден: {file_to_download}")
         sys.exit(1)
