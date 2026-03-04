@@ -4,4 +4,4 @@
 !pyproject.toml
 !requirements.txt
 !uv.lock
-!youtube_download.py
+!*.py
