@@ -1,7 +1,7 @@
 [project]
 name = "youtube-download"
 version = "0.1.0"
-description = "Скачака mp3 с youtube по списку"
+description = "Скачака mp3 и mp4 с youtube по списку"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
