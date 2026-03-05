@@ -24,7 +24,7 @@ class Colors:
     BOLD = "\033[1m"
 
 
-def download_mp4(links_file: str, concurrent_fragments: int = 10, out_dir: str = ".", max_height: int = 1080):
+def download_mp4(links_file: str, concurrent_fragments: int = 10, out_dir: str = ".", max_height: int = 1080, metadata: bool = False):
     errors = 0
     ok = 0
 
@@ -60,6 +60,11 @@ def download_mp4(links_file: str, concurrent_fragments: int = 10, out_dir: str =
             file_names.add(final_mp4)
             print(f"{final_mp4}", end="", flush=True)
 
+    postprocessors = []
+    if metadata:
+        postprocessors.append({"key": "FFmpegMetadata"})
+    postprocessors.append({"key": "FFmpegVideoRemuxer", "preferedformat": "mp4"})
+
     ydl_opts = {
         # Лучшее видео до 1080p + лучшее аудио, с приоритетом MP4/M4A
         "format": (
@@ -80,10 +85,7 @@ def download_mp4(links_file: str, concurrent_fragments: int = 10, out_dir: str =
         "noprogress": True,
         # Если видео и аудио скачались отдельно, объединяем в mp4
         "merge_output_format": "mp4",
-        "postprocessors": [
-            {"key": "FFmpegMetadata"},
-            {"key": "FFmpegVideoRemuxer", "preferedformat": "mp4"},
-        ],
+        "postprocessors": postprocessors,
     }
 
     with open(links_file, "r", encoding="utf-8") as f:
