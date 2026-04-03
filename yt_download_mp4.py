@@ -4,7 +4,13 @@
 # ]
 # ///
 
+# Для запуска из powershell добавить в $PROFILE:
+# function dlmp4 { uv run --upgrade "D:\Projects\youtube_download\yt_download_mp4.py" $args }
+
+
+import argparse
 import os
+import re
 import subprocess
 import sys
 from datetime import datetime
@@ -24,11 +30,53 @@ class Colors:
     BOLD = "\033[1m"
 
 
-def download_mp4(links_file: str, concurrent_fragments: int = 10, out_dir: str = ".", max_height: int = 1080, metadata: bool = False):
+def download_mp4(
+    links_file: str,
+    concurrent_fragments: int = 10,
+    out_dir: str = ".",
+    max_height: int = 1080,
+    metadata: bool = False,
+    prefer_avc_only: bool = False,  # True = если AVC нет, считать это ошибкой и не качать
+    use_nvenc: bool = False,  # True = h264_nvenc, иначе libx264
+):
     errors = 0
     ok = 0
+    skipped = 0
 
-    last_filename = ""  # что сейчас качаем
+    last_filename = ""
+    file_names = set()
+    duplicates = []
+
+    def is_avc_codec(vcodec: str) -> bool:
+        v = (vcodec or "").lower()
+        return v.startswith("avc1") or v.startswith("h264")
+
+    def safe_get_selected_video_codec(info: dict) -> str:
+        # После extract_info/download=False yt-dlp уже умеет не ломать обычный выбор формата.
+        requested = info.get("requested_formats") or []
+        for fmt in requested:
+            vcodec = (fmt.get("vcodec") or "").strip()
+            if vcodec and vcodec != "none":
+                return vcodec
+
+        vcodec = (info.get("vcodec") or "").strip()
+        return vcodec
+
+    def safe_get_selected_ext(info: dict) -> str:
+        requested = info.get("requested_formats") or []
+        for fmt in requested:
+            ext = (fmt.get("ext") or "").strip()
+            vcodec = (fmt.get("vcodec") or "").strip()
+            if vcodec and vcodec != "none":
+                return ext
+        return (info.get("ext") or "").strip()
+
+    def sanitize_final_name(info: dict) -> str:
+        title = info.get("title") or "video"
+        title = re.sub(r'[\\/*?:"<>|]', "_", title).strip()
+        if len(title) > 200:
+            title = title[:200].rstrip()
+        return f"{title}.mp4"
 
     def hook(d):
         nonlocal last_filename, duplicates, file_names
@@ -48,31 +96,98 @@ def download_mp4(links_file: str, concurrent_fragments: int = 10, out_dir: str =
             )
 
         elif status == "finished":
-            print()  # перенос строки после прогресса
-            base, _ext = os.path.splitext(d.get("filename") or last_filename)
-            final_mp4 = os.path.basename(base + ".mp4")
+            print()
 
-            if final_mp4 in file_names:
-                print(f"{Colors.YELLOW}{final_mp4} - дубликат{Colors.RESET}", end="", flush=True)
-                duplicates.append(final_mp4)
-                return
+    def build_postprocessors(needs_recode: bool, needs_remux: bool, metadata: bool):
+        postprocessors = []
 
-            file_names.add(final_mp4)
-            print(f"{final_mp4}", end="", flush=True)
+        if metadata:
+            postprocessors.append({"key": "FFmpegMetadata"})
 
-    postprocessors = []
-    if metadata:
-        postprocessors.append({"key": "FFmpegMetadata"})
-    postprocessors.append({"key": "FFmpegVideoRemuxer", "preferedformat": "mp4"})
+        if needs_recode:
+            postprocessors.append(
+                {
+                    "key": "FFmpegVideoConvertor",
+                    "preferedformat": "mp4",
+                }
+            )
+        elif needs_remux:
+            postprocessors.append(
+                {
+                    "key": "FFmpegVideoRemuxer",
+                    "preferedformat": "mp4",
+                }
+            )
 
-    ydl_opts = {
-        # Лучшее видео до 1080p + лучшее аудио, с приоритетом MP4/M4A
-        "format": (
-            f"bestvideo[height<={max_height}][ext=mp4]+bestaudio[ext=m4a]/"
-            f"bestvideo[height<={max_height}]+bestaudio/"
-            f"best[height<={max_height}][ext=mp4]/"
-            f"best[height<={max_height}]"
-        ),
+        return postprocessors
+
+    def build_postprocessor_args(needs_recode: bool, use_nvenc: bool):
+        if not needs_recode:
+            return []
+
+        if use_nvenc:
+            return [
+                "-c:v",
+                "h264_nvenc",
+                "-preset",
+                "p4",
+                "-cq",
+                "23",
+                "-pix_fmt",
+                "yuv420p",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "192k",
+                "-movflags",
+                "+faststart",
+            ]
+
+        return [
+            "-c:v",
+            "libx264",
+            "-preset",
+            "medium",
+            "-crf",
+            "23",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-movflags",
+            "+faststart",
+        ]
+
+    os.makedirs(out_dir, exist_ok=True)
+
+    with open(links_file, "r", encoding="utf-8") as f:
+        urls = [line.strip() for line in f if line.strip().startswith(("http://", "https://"))]
+
+    total = len(urls)
+
+    print("=" * 80)
+    print("Файл с ссылками:", links_file)
+    print(f"Скачиваю {total} видео...")
+    print(f"Максимальное разрешение: {max_height}")
+    print(f"Режим AVC only: {'Да' if prefer_avc_only else 'Нет'}")
+    print(f"Энкодер: {'h264_nvenc' if use_nvenc else 'libx264'}")
+
+    # База:
+    # - формат оставляем универсальным
+    # - сортировкой говорим yt-dlp: предпочитай AVC/M4A и высоту поближе к max_height
+    #
+    # yt-dlp поддерживает сортировку через format-sort, в т.ч. +codec:avc:m4a.
+    base_ydl_opts = {
+        "format": f"bv*+ba/b",
+        "format_sort": [
+            "+codec:avc:m4a",
+            f"res:{max_height}",
+            "fps",
+            "br",
+            "size",
+        ],
         "concurrent_fragments": concurrent_fragments,
         "outtmpl": os.path.join(out_dir, "%(title)s.%(ext)s"),
         "windowsfilenames": True,
@@ -83,51 +198,138 @@ def download_mp4(links_file: str, concurrent_fragments: int = 10, out_dir: str =
         "progress_hooks": [hook],
         "noplaylist": False,
         "noprogress": True,
-        # Если видео и аудио скачались отдельно, объединяем в mp4
         "merge_output_format": "mp4",
-        "postprocessors": postprocessors,
     }
-
-    with open(links_file, "r", encoding="utf-8") as f:
-        urls = [line.strip() for line in f if line.strip().startswith(("http://", "https://"))]
-
-    total = len(urls)
-    print("=" * 80)
-    print("Файл с ссылками:", links_file)
-    print(f"Скачиваю {total} видеофайлов...")
-    os.makedirs(out_dir, exist_ok=True)
-
-    file_names = set()
-    duplicates = []
 
     for i, url in enumerate(urls, 1):
         print(f"\n[{i}/{total}] {url}")
 
-        # новый YoutubeDL на каждый URL, чтобы retcode не "залипал"
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ret = ydl.download([url])
+        try:
+            # 1) Сначала симулируем выбор формата
+            with yt_dlp.YoutubeDL(base_ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
 
-        if ret == 0:
-            print(" ✅")
-            ok += 1
-        else:
+            if not info:
+                print(" ❌ Не удалось получить информацию о видео")
+                errors += 1
+                continue
+
+            selected_vcodec = safe_get_selected_video_codec(info)
+            selected_ext = safe_get_selected_ext(info)
+            final_name = sanitize_final_name(info)
+
+            if final_name in file_names:
+                print(f"{Colors.YELLOW}{final_name} - дубликат{Colors.RESET}")
+                duplicates.append(final_name)
+                continue
+
+            already_avc = is_avc_codec(selected_vcodec)
+            needs_recode = not already_avc
+            needs_remux = already_avc and selected_ext.lower() != "mp4"
+
+            print(
+                f"Выбран кодек: {selected_vcodec or 'unknown'} | "
+                f"контейнер: {selected_ext or 'unknown'} | "
+                f"{'конвертация в AVC' if needs_recode else ('remux в mp4' if needs_remux else 'без конвертации')}"
+            )
+
+            if prefer_avc_only and not already_avc:
+                print(f"{Colors.RED}AVC-формат недоступен, пропускаю{Colors.RESET}")
+                skipped += 1
+                continue
+
+            postprocessors = build_postprocessors(
+                needs_recode=needs_recode,
+                needs_remux=needs_remux,
+                metadata=metadata,
+            )
+
+            ydl_opts = dict(base_ydl_opts)
+            ydl_opts["postprocessors"] = postprocessors
+
+            ppa = build_postprocessor_args(needs_recode=needs_recode, use_nvenc=use_nvenc)
+            if ppa:
+                ydl_opts["postprocessor_args"] = ppa
+
+            # 2) Реальная загрузка
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                ret = ydl.download([url])
+
+            if ret == 0:
+                file_names.add(final_name)
+                print(f"{final_name} ✅")
+                ok += 1
+            else:
+                print(" ❌")
+                errors += 1
+
+        except Exception as e:
+            print(f" ❌ {e}")
             errors += 1
 
     print(
-        f"\nГотово! Успешно: {Colors.GREEN}{ok}{Colors.RESET}, "
+        f"\nГотово!"
+        f"\nУспешно: {Colors.GREEN}{ok}{Colors.RESET}, "
         f"Ошибок: {Colors.RED}{errors}{Colors.RESET}, "
+        f"Пропущено (AVC only): {Colors.YELLOW}{skipped}{Colors.RESET}, "
         f"Дубликаты: {Colors.YELLOW}{len(duplicates)}{Colors.RESET}"
-        f"\nФайлы загружены в {os.path.abspath(out_dir)}"
+        f"\nФайлы загружены в: {os.path.abspath(out_dir)}"
     )
 
 
 if __name__ == "__main__":
-    print("Скрипт загрузки видео с YouTube")
-    file_to_download = input("Введите имя файла с ссылками (links.txt): ") or "links.txt"
+    parser = argparse.ArgumentParser(description="Скрипт загрузки видео с YouTube")
+    parser.add_argument(
+        "links_file",
+        nargs="?",
+        default="links.txt",
+        help="Файл со списком ссылок",
+    )
+    parser.add_argument(
+        "--max-height",
+        type=int,
+        default=1080,
+        help="Максимальная высота видео (по умолчанию: 1080)",
+    )
+    parser.add_argument(
+        "--cpu",
+        action="store_true",
+        help="Использовать libx264 вместо h264_nvenc",
+    )
+    parser.add_argument(
+        "--avc-only",
+        action="store_true",
+        help="Скачивать только AVC-видео; если AVC нет — пропускать",
+    )
+    parser.add_argument(
+        "--metadata",
+        action="store_true",
+        help="Добавлять метаданные через FFmpegMetadata",
+    )
+    parser.add_argument(
+        "--out-dir",
+        default=None,
+        help="Папка для сохранения файлов (по умолчанию: downloads/дата)",
+    )
+
+    args = parser.parse_args()
+
+    file_to_download = args.links_file
+
     if not os.path.exists(file_to_download):
         print(f"Файл с ссылками не найден: {file_to_download}")
         sys.exit(1)
+
     now = datetime.now().strftime("%d.%m.%Y")
-    out_dir = os.path.join("downloads", now)
-    download_mp4(file_to_download, out_dir=out_dir)
-    subprocess.run(["explorer", out_dir], shell=True)
+    out_dir = args.out_dir or os.path.join("downloads", now)
+
+    download_mp4(
+        file_to_download,
+        out_dir=out_dir,
+        max_height=args.max_height,
+        metadata=args.metadata,
+        prefer_avc_only=args.avc_only,
+        use_nvenc=not args.cpu,
+    )
+
+    subprocess.run(["explorer", os.path.abspath(out_dir)], shell=True)
