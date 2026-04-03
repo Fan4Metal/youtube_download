@@ -98,6 +98,7 @@ def download_mp4(
     metadata: bool = False,
     prefer_avc_only: bool = False,  # True = если AVC нет, считать это ошибкой и не качать
     use_nvenc: bool = False,  # True = h264_nvenc, иначе libx264
+    prefer_quality: bool = False,
 ):
     errors = 0
     ok = 0
@@ -157,6 +158,20 @@ def download_mp4(
 
         elif status == "finished":
             print()
+
+    _pp_stage_printed = set()
+
+    def postprocessor_hook(d):
+        status = d.get("status")
+        pp = d.get("postprocessor", "unknown")
+        info = d.get("info_dict") or {}
+        video_id = info.get("id") or ""
+
+        if pp == "Merger":
+            key = (video_id, pp)
+            if status == "started" and key not in _pp_stage_printed:
+                _pp_stage_printed.add(key)
+                print(f"Подготовка видео...")
 
     def build_postprocessors(needs_recode: bool, needs_remux: bool, metadata: bool):
         postprocessors = []
@@ -232,20 +247,32 @@ def download_mp4(
     print(f"Режим AVC only: {'Да' if prefer_avc_only else 'Нет'}")
     print(f"Энкодер: {'h264_nvenc' if use_nvenc else 'libx264'}")
 
-    # База:
-    # - формат оставляем универсальным
-    # - сортировкой говорим yt-dlp: предпочитай AVC/M4A и высоту поближе к max_height
-    #
-    # yt-dlp поддерживает сортировку через format-sort, в т.ч. +codec:avc:m4a.
-    base_ydl_opts = {
-        "format": f"bv*+ba/b",
-        "format_sort": [
+    # Режимы выбора:
+    # 1) prefer_quality=False:
+    #    стараемся сначала брать AVC/M4A, затем ближайшее разрешение
+    # 2) prefer_quality=True:
+    #    сначала берем лучшее качество по max_height, кодек не важен,
+    #    а если он не AVC/mp4 — потом перекодируем в AVC/mp4
+
+    if prefer_quality:
+        format_sort = [
+            f"res:{max_height}",
+            "fps",
+            "br",
+            "size",
+        ]
+    else:
+        format_sort = [
             "+codec:avc:m4a",
             f"res:{max_height}",
             "fps",
             "br",
             "size",
-        ],
+        ]
+
+    base_ydl_opts = {
+        "format": "bv*+ba/b",
+        "format_sort": format_sort,
         "concurrent_fragments": concurrent_fragments,
         "outtmpl": os.path.join(out_dir, "%(title)s.%(ext)s"),
         "windowsfilenames": True,
@@ -254,16 +281,20 @@ def download_mp4(
         "no_warnings": True,
         "ignoreerrors": True,
         "progress_hooks": [hook],
+        "postprocessor_hooks": [postprocessor_hook],
         "noplaylist": False,
         "noprogress": True,
         "merge_output_format": "mp4",
     }
 
     for i, url in enumerate(urls, 1):
+        _pp_stage_printed.clear()
         print(f"\n[{i}/{total}] {url}")
 
         try:
-            # 1) Сначала симулируем выбор формата
+            # 1) Сначала симулируем выбор формата согласно режиму:
+            #    - prefer_quality=False -> приоритет AVC
+            #    - prefer_quality=True  -> приоритет качества/разрешения
             with yt_dlp.YoutubeDL(base_ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=False)
 
@@ -369,6 +400,11 @@ if __name__ == "__main__":
         default=None,
         help="Папка для сохранения файлов (по умолчанию: downloads/дата)",
     )
+    parser.add_argument(
+        "--prefer-quality",
+        action="store_true",
+        help="Сначала выбирать лучшее качество по заданному разрешению, а затем при необходимости перекодировать в AVC/mp4",
+    )
 
     args = parser.parse_args()
     file_to_download = args.links_file
@@ -387,5 +423,6 @@ if __name__ == "__main__":
         metadata=args.metadata,
         prefer_avc_only=args.avc_only,
         use_nvenc=not args.cpu,
+        prefer_quality=args.prefer_quality,
     )
     subprocess.run(["explorer", os.path.abspath(out_dir)], shell=True)
