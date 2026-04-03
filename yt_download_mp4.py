@@ -73,11 +73,11 @@ def normalize_video_url(url: str) -> str:
     return url
 
 
-def extract_urls_from_file(links_file: str) -> list[str]:
+def extract_urls_from_file(source_file: str) -> list[str]:
     urls = []
     seen = set()
 
-    with open(links_file, "r", encoding="utf-8") as f:
+    with open(source_file, "r", encoding="utf-8") as f:
         for line in f:
             found = URL_RE.findall(line)
             for raw_url in found:
@@ -90,7 +90,7 @@ def extract_urls_from_file(links_file: str) -> list[str]:
 
 
 def download_video(
-    links_file: str,
+    source: str,
     concurrent_fragments: int = 10,
     out_dir: str = ".",
     max_height: int = 1080,
@@ -148,7 +148,7 @@ def download_video(
         return f"{title}.mp3" if audio_only else f"{title}.mp4"
 
     def hook(d):
-        nonlocal last_filename, duplicates, file_names
+        nonlocal last_filename
 
         status = d.get("status")
 
@@ -179,7 +179,7 @@ def download_video(
             key = (video_id, pp)
             if status == "started" and key not in _pp_stage_printed:
                 _pp_stage_printed.add(key)
-                print(f"Подготовка...")
+                print("Подготовка...")
 
     def build_postprocessors(
         *,
@@ -264,17 +264,23 @@ def download_video(
 
     os.makedirs(out_dir, exist_ok=True)
 
-    urls = extract_urls_from_file(links_file)
+    if re.match(r"^https?://", source, re.IGNORECASE):
+        urls = [normalize_video_url(source)]
+        source_label = f"Одна ссылка: {urls[0]}"
+    else:
+        urls = extract_urls_from_file(source)
+        source_label = f"Файл с ссылками: {source}"
+
     total = len(urls)
 
     print("=" * 80)
-    print("Файл с ссылками:", links_file)
+    print(source_label)
     print(f"Скачиваю {total} {'аудио' if audio_only else 'видео'}...")
     if audio_only:
         print(f"Режим: только аудио (mp3 {audio_bitrate}k)")
     else:
         if prefer_quality:
-            print(f"Режим: приоритет качества/разрешения")
+            print("Режим: приоритет качества/разрешения")
         print(f"Максимальное разрешение: {max_height}")
         print(f"Режим AVC only: {'Да' if prefer_avc_only else 'Нет'}")
         print(f"Энкодер: {'h264_nvenc' if use_nvenc else 'libx264'}")
@@ -282,16 +288,16 @@ def download_video(
     if prefer_quality:
         format_sort = [
             f"res:{max_height}",
-            "fps",
             "br",
+            "fps",
             "size",
         ]
     else:
         format_sort = [
             "+codec:avc:m4a",
             f"res:{max_height}",
-            "fps",
             "br",
+            "fps",
             "size",
         ]
 
@@ -389,7 +395,10 @@ def download_video(
             ydl_opts = dict(base_ydl_opts)
             ydl_opts["postprocessors"] = postprocessors
 
-            ppa = build_postprocessor_args(needs_recode=needs_recode, use_nvenc=use_nvenc)
+            ppa = build_postprocessor_args(
+                needs_recode=needs_recode,
+                use_nvenc=use_nvenc,
+            )
             if ppa:
                 ydl_opts["postprocessor_args"] = ppa
 
@@ -421,12 +430,13 @@ def download_video(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Скрипт загрузки видео/аудио с YouTube")
     parser.add_argument(
-        "links_file",
+        "source",
         nargs="?",
         default="links.txt",
-        help="Файл со списком ссылок",
+        help="Либо URL одного видео, либо файл со списком ссылок (по умолчанию: links.txt)",
     )
     parser.add_argument(
+        "-r",
         "--max-height",
         type=int,
         default=1080,
@@ -443,43 +453,48 @@ if __name__ == "__main__":
         help="Скачивать только AVC-видео; если AVC нет — пропускать",
     )
     parser.add_argument(
+        "-m",
         "--metadata",
         action="store_true",
         help="Добавлять метаданные через FFmpegMetadata",
     )
     parser.add_argument(
+        "-o",
         "--out-dir",
         default=None,
         help="Папка для сохранения файлов (по умолчанию: downloads/дата)",
     )
     parser.add_argument(
+        "-q",
         "--prefer-quality",
         action="store_true",
         help="Сначала выбирать лучшее качество по заданному разрешению, а затем при необходимости перекодировать в AVC/mp4",
     )
     parser.add_argument(
+        "-a",
         "--audio-only",
         action="store_true",
         help="Скачивать только аудио и конвертировать в mp3",
     )
     parser.add_argument(
+        "-b",
         "--audio-bitrate",
         default="192",
         help="Битрейт mp3 в режиме --audio-only (по умолчанию: 192)",
     )
 
     args = parser.parse_args()
-    file_to_download = args.links_file
+    source = args.source
 
-    if not os.path.exists(file_to_download):
-        print(f"Файл с ссылками не найден: {file_to_download}")
+    if not re.match(r"^https?://", source, re.IGNORECASE) and not os.path.exists(source):
+        print(f"Файл с ссылками не найден: {source}")
         sys.exit(1)
 
     now = datetime.now().strftime("%d.%m.%Y")
     out_dir = args.out_dir or os.path.join("downloads", now)
 
     download_video(
-        file_to_download,
+        source=source,
         out_dir=out_dir,
         max_height=args.max_height,
         metadata=args.metadata,
