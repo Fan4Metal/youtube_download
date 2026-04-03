@@ -14,6 +14,7 @@ import re
 import subprocess
 import sys
 from datetime import datetime
+from urllib.parse import parse_qs, urlparse
 
 import yt_dlp
 
@@ -28,6 +29,65 @@ class Colors:
     WHITE = "\033[97m"
     RESET = "\033[0m"
     BOLD = "\033[1m"
+
+
+URL_RE = re.compile(r'https?://[^\s<>"\'\]\)]+', re.IGNORECASE)
+
+
+def normalize_video_url(url: str) -> str:
+    url = url.strip().rstrip(".,;!?)")
+
+    parsed = urlparse(url)
+    host = parsed.netloc.lower()
+    path = parsed.path
+    query = parse_qs(parsed.query)
+
+    # youtu.be/<video_id> -> оставить только ID
+    if "youtu.be" in host:
+        video_id = path.strip("/").split("/")[0] if path.strip("/") else ""
+        if video_id:
+            return f"https://youtu.be/{video_id}"
+        return url
+
+    # youtube.com/watch?v=ID -> оставить только v
+    if "youtube.com" in host or "www.youtube.com" in host or "m.youtube.com" in host:
+        if path == "/watch":
+            video_id = query.get("v", [""])[0]
+            if video_id:
+                return f"https://www.youtube.com/watch?v={video_id}"
+            return url
+
+        # shorts/<id>
+        if path.startswith("/shorts/"):
+            video_id = path.split("/shorts/", 1)[1].split("/", 1)[0]
+            if video_id:
+                return f"https://www.youtube.com/shorts/{video_id}"
+            return url
+
+        # live/<id>
+        if path.startswith("/live/"):
+            video_id = path.split("/live/", 1)[1].split("/", 1)[0]
+            if video_id:
+                return f"https://www.youtube.com/live/{video_id}"
+            return url
+
+    return url
+
+
+def extract_urls_from_file(links_file: str) -> list[str]:
+    urls = []
+    seen = set()
+
+    with open(links_file, "r", encoding="utf-8") as f:
+        for line in f:
+            found = URL_RE.findall(line)
+            for raw_url in found:
+                clean_url = normalize_video_url(raw_url)
+                if clean_url not in seen:
+                    seen.add(clean_url)
+                    urls.append(clean_url)
+
+    return urls
 
 
 def download_mp4(
@@ -162,9 +222,7 @@ def download_mp4(
 
     os.makedirs(out_dir, exist_ok=True)
 
-    with open(links_file, "r", encoding="utf-8") as f:
-        urls = [line.strip() for line in f if line.strip().startswith(("http://", "https://"))]
-
+    urls = extract_urls_from_file(links_file)
     total = len(urls)
 
     print("=" * 80)
@@ -313,7 +371,6 @@ if __name__ == "__main__":
     )
 
     args = parser.parse_args()
-
     file_to_download = args.links_file
 
     if not os.path.exists(file_to_download):
@@ -331,5 +388,4 @@ if __name__ == "__main__":
         prefer_avc_only=args.avc_only,
         use_nvenc=not args.cpu,
     )
-
     subprocess.run(["explorer", os.path.abspath(out_dir)], shell=True)
