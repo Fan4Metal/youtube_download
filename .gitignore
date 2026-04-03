@@ -1,7 +1,3 @@
 *
 !.gitignore
-!.python-version
-!pyproject.toml
-!requirements.txt
-!uv.lock
 !*.py

@@ -5,7 +5,7 @@
 # ///
 
 # Для запуска из powershell добавить в $PROFILE:
-# function dlmp4 { uv run --upgrade "D:\Projects\youtube_download\yt_download_mp4.py" $args }
+# function dl { uv run --upgrade "D:\Projects\youtube_download\yt_download_mp4.py" $args }
 
 import argparse
 import os
@@ -273,6 +273,8 @@ def download_video(
     if audio_only:
         print(f"Режим: только аудио (mp3 {audio_bitrate}k)")
     else:
+        if prefer_quality:
+            print(f"Режим: приоритет качества/разрешения")
         print(f"Максимальное разрешение: {max_height}")
         print(f"Режим AVC only: {'Да' if prefer_avc_only else 'Нет'}")
         print(f"Энкодер: {'h264_nvenc' if use_nvenc else 'libx264'}")
@@ -417,7 +419,7 @@ def download_video(
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Скрипт загрузки видео с YouTube")
+    parser = argparse.ArgumentParser(description="Скрипт загрузки видео/аудио с YouTube")
     parser.add_argument(
         "links_file",
         nargs="?",
