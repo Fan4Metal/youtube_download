@@ -91,13 +91,14 @@ def extract_urls_from_file(source_file: str) -> list[str]:
 
 def download_video(
     source: str,
+    *,
     concurrent_fragments: int = 10,
     out_dir: str = ".",
     max_height: int = 1080,
     metadata: bool = False,
     prefer_avc_only: bool = False,  # True = если AVC нет, считать это ошибкой и не качать
     use_nvenc: bool = False,  # True = h264_nvenc, иначе libx264
-    prefer_quality: bool = False,
+    prefer_avc: bool = False,  # True = выбирать AVC-видео первым, а затем при необходимости перекодировать в mp4
     audio_only: bool = False,
     audio_bitrate: str = "192",
 ):
@@ -279,30 +280,39 @@ def download_video(
     if audio_only:
         print(f"Режим: только аудио (mp3 {audio_bitrate}k)")
     else:
-        if prefer_quality:
-            print("Режим: приоритет качества/разрешения")
+        if prefer_avc:
+            print("Режим: приоритет AVC (без конвертации)")
         print(f"Максимальное разрешение: {max_height}")
         print(f"Режим AVC only: {'Да' if prefer_avc_only else 'Нет'}")
         print(f"Энкодер: {'h264_nvenc' if use_nvenc else 'libx264'}")
 
-    if prefer_quality:
-        format_sort = [
-            f"res:{max_height}",
-            "br",
-            "fps",
-            "size",
-        ]
+    if audio_only:
+        format_sort = []
+        fmt = "bestaudio/best"
     else:
-        format_sort = [
-            "+codec:avc:m4a",
-            f"res:{max_height}",
-            "br",
-            "fps",
-            "size",
-        ]
+        if prefer_avc or prefer_avc_only:
+            format_sort = [
+                "+codec:avc:m4a",
+                f"res:{max_height}",
+                "fps",
+                "br",
+                "size",
+            ]
+        else:
+            format_sort = [
+                f"+res:{max_height}",
+                "br",
+                "fps",
+                "size",
+            ]
+
+        if prefer_avc_only:
+            fmt = "bv*[vcodec^=avc]+ba[acodec^=mp4a]/b"
+        else:
+            fmt = "bv*+ba[acodec^=mp4a]/b"
 
     base_ydl_opts = {
-        "format": "bestaudio/best" if audio_only else "bv*+ba/b",
+        "format": fmt,
         "format_sort": [] if audio_only else format_sort,
         "concurrent_fragments": concurrent_fragments,
         "outtmpl": os.path.join(out_dir, "%(title)s.%(ext)s"),
@@ -466,9 +476,9 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "-q",
-        "--prefer-quality",
+        "--prefer-avc",
         action="store_true",
-        help="Сначала выбирать лучшее качество по заданному разрешению, а затем при необходимости перекодировать в AVC/mp4",
+        help="Выбирать AVC-видео в приоритете (быстрее, но разрешение может быть ниже заявленного)",
     )
     parser.add_argument(
         "-a",
@@ -500,7 +510,7 @@ if __name__ == "__main__":
         metadata=args.metadata,
         prefer_avc_only=args.avc_only,
         use_nvenc=not args.cpu,
-        prefer_quality=args.prefer_quality,
+        prefer_avc=args.prefer_avc,
         audio_only=args.audio_only,
         audio_bitrate=args.audio_bitrate,
     )
