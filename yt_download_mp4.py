@@ -323,7 +323,7 @@ def download_video(
         "ignoreerrors": True,
         "progress_hooks": [hook],
         "postprocessor_hooks": [postprocessor_hook],
-        "noplaylist": False,
+        "noplaylist": True,
         "noprogress": True,
         "merge_output_format": "mp4",
     }
@@ -514,4 +514,4 @@ if __name__ == "__main__":
         audio_only=args.audio_only,
         audio_bitrate=args.audio_bitrate,
     )
-    subprocess.run(["explorer", os.path.abspath(out_dir)], shell=True)
+    os.startfile(os.path.abspath(out_dir))
