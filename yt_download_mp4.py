@@ -10,7 +10,7 @@
 import argparse
 import os
 import re
-import subprocess
+import shutil
 import sys
 from datetime import datetime
 from urllib.parse import parse_qs, urlparse
@@ -109,6 +109,7 @@ def download_video(
     last_filename = ""
     file_names = set()
     duplicates = []
+    ffmpeg_available = bool(shutil.which("ffmpeg") and shutil.which("ffprobe"))
 
     def is_avc_codec(vcodec: str) -> bool:
         v = (vcodec or "").lower()
@@ -141,11 +142,13 @@ def download_video(
 
         return (info.get("ext") or "").strip()
 
-    def sanitize_final_name(info: dict, audio_only: bool = False) -> str:
+    def sanitize_final_name(info: dict, audio_only: bool = False, final_ext: str | None = None) -> str:
         title = info.get("title") or "video"
         title = re.sub(r'[\\/*?:"<>|]', "_", title).strip()
         if len(title) > 200:
             title = title[:200].rstrip()
+        if final_ext:
+            return f"{title}.{final_ext}"
         return f"{title}.mp3" if audio_only else f"{title}.mp4"
 
     def hook(d):
@@ -277,39 +280,57 @@ def download_video(
     print("=" * 80)
     print(source_label)
     print(f"Скачиваю {total} {'аудио' if audio_only else 'видео'}...")
+    print(f"FFmpeg: {'доступен' if ffmpeg_available else 'не найден'}")
     if audio_only:
-        print(f"Режим: только аудио (mp3 {audio_bitrate}k)")
+        if ffmpeg_available:
+            print(f"Режим: только аудио (mp3 {audio_bitrate}k)")
+        else:
+            print("Режим: только аудио без конвертации (исходный формат)")
     else:
         if prefer_avc:
             print("Режим: приоритет AVC (без конвертации)")
         print(f"Максимальное разрешение: {max_height}")
         print(f"Режим AVC only: {'Да' if prefer_avc_only else 'Нет'}")
-        print(f"Энкодер: {'h264_nvenc' if use_nvenc else 'libx264'}")
+        if ffmpeg_available:
+            print(f"Энкодер: {'h264_nvenc' if use_nvenc else 'libx264'}")
+        else:
+            print("Постобработка отключена: будет скачан готовый файл без merge и конвертации")
 
-    if audio_only:
-        format_sort = []
-        fmt = "bestaudio/best"
+    if ffmpeg_available:
+        if audio_only:
+            format_sort = []
+            fmt = "bestaudio/best"
+        else:
+            if prefer_avc or prefer_avc_only:
+                format_sort = [
+                    "+codec:avc:m4a",
+                    f"res:{max_height}",
+                    "fps",
+                    "br",
+                    "size",
+                ]
+            else:
+                format_sort = [
+                    f"+res:{max_height}",
+                    "br",
+                    "fps",
+                    "size",
+                ]
+
+            if prefer_avc_only:
+                fmt = "bv*[vcodec^=avc]+ba[acodec^=mp4a]/b"
+            else:
+                fmt = "bv*+ba[acodec^=mp4a]/b"
     else:
-        if prefer_avc or prefer_avc_only:
-            format_sort = [
-                "+codec:avc:m4a",
-                f"res:{max_height}",
-                "fps",
-                "br",
-                "size",
-            ]
+        format_sort = []
+        if audio_only:
+            fmt = "bestaudio/best"
+        elif prefer_avc_only:
+            fmt = f"best[ext=mp4][vcodec^=avc][height<={max_height}]/best[vcodec^=avc][height<={max_height}]"
+        elif prefer_avc:
+            fmt = f"best[ext=mp4][vcodec^=avc][height<={max_height}]/best[height<={max_height}]"
         else:
-            format_sort = [
-                f"+res:{max_height}",
-                "br",
-                "fps",
-                "size",
-            ]
-
-        if prefer_avc_only:
-            fmt = "bv*[vcodec^=avc]+ba[acodec^=mp4a]/b"
-        else:
-            fmt = "bv*+ba[acodec^=mp4a]/b"
+            fmt = f"best[ext=mp4][height<={max_height}]/best[height<={max_height}]"
 
     base_ydl_opts = {
         "format": fmt,
@@ -325,8 +346,9 @@ def download_video(
         "postprocessor_hooks": [postprocessor_hook],
         "noplaylist": True,
         "noprogress": True,
-        "merge_output_format": "mp4",
     }
+    if ffmpeg_available:
+        base_ydl_opts["merge_output_format"] = "mp4"
 
     for i, url in enumerate(urls, 1):
         _pp_stage_printed.clear()
@@ -341,27 +363,35 @@ def download_video(
                 errors += 1
                 continue
 
-            final_name = sanitize_final_name(info, audio_only=audio_only)
-
-            if final_name in file_names:
-                print(f"{Colors.YELLOW}{final_name} - дубликат{Colors.RESET}")
-                duplicates.append(final_name)
-                continue
-
             if audio_only:
                 selected_ext = safe_get_selected_ext(info)
-                print(f"Выбран режим: только аудио | источник: {selected_ext or 'unknown'} -> mp3 {audio_bitrate}k")
-
-                postprocessors = build_postprocessors(
-                    audio_only=True,
-                    audio_bitrate=audio_bitrate,
-                    needs_recode=False,
-                    needs_remux=False,
-                    metadata=metadata,
-                )
-
                 ydl_opts = dict(base_ydl_opts)
-                ydl_opts["postprocessors"] = postprocessors
+                if ffmpeg_available:
+                    final_name = sanitize_final_name(info, audio_only=True)
+                else:
+                    final_name = sanitize_final_name(
+                        info,
+                        audio_only=False,
+                        final_ext=(selected_ext or "m4a"),
+                    )
+
+                if final_name in file_names:
+                    print(f"{Colors.YELLOW}{final_name} - дубликат{Colors.RESET}")
+                    duplicates.append(final_name)
+                    continue
+
+                if ffmpeg_available:
+                    print(f"Выбран режим: только аудио | источник: {selected_ext or 'unknown'} -> mp3 {audio_bitrate}k")
+                    postprocessors = build_postprocessors(
+                        audio_only=True,
+                        audio_bitrate=audio_bitrate,
+                        needs_recode=False,
+                        needs_remux=False,
+                        metadata=metadata,
+                    )
+                    ydl_opts["postprocessors"] = postprocessors
+                else:
+                    print(f"Выбран режим: только аудио | источник: {selected_ext or 'unknown'} | без конвертации")
 
                 with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                     ret = ydl.download([url])
@@ -382,35 +412,43 @@ def download_video(
             already_avc = is_avc_codec(selected_vcodec)
             needs_recode = not already_avc
             needs_remux = already_avc and selected_ext.lower() != "mp4"
+            final_ext = "mp4" if ffmpeg_available else (selected_ext or "mp4")
+            final_name = sanitize_final_name(info, audio_only=False, final_ext=final_ext)
 
-            print(
-                f"Выбран кодек: {selected_vcodec or 'unknown'} | "
-                f"контейнер: {selected_ext or 'unknown'} | "
-                f"{'конвертация в AVC' if needs_recode else ('remux в mp4' if needs_remux else 'без конвертации')}"
-            )
+            if final_name in file_names:
+                print(f"{Colors.YELLOW}{final_name} - дубликат{Colors.RESET}")
+                duplicates.append(final_name)
+                continue
+
+            if ffmpeg_available:
+                action_label = "конвертация в AVC" if needs_recode else ("remux в mp4" if needs_remux else "без конвертации")
+            else:
+                action_label = "прямая загрузка без постобработки"
+
+            print(f"Выбран кодек: {selected_vcodec or 'unknown'} | контейнер: {selected_ext or 'unknown'} | {action_label}")
 
             if prefer_avc_only and not already_avc:
                 print(f"{Colors.RED}AVC-формат недоступен, пропускаю{Colors.RESET}")
                 skipped += 1
                 continue
 
-            postprocessors = build_postprocessors(
-                audio_only=False,
-                audio_bitrate=audio_bitrate,
-                needs_recode=needs_recode,
-                needs_remux=needs_remux,
-                metadata=metadata,
-            )
-
             ydl_opts = dict(base_ydl_opts)
-            ydl_opts["postprocessors"] = postprocessors
+            if ffmpeg_available:
+                postprocessors = build_postprocessors(
+                    audio_only=False,
+                    audio_bitrate=audio_bitrate,
+                    needs_recode=needs_recode,
+                    needs_remux=needs_remux,
+                    metadata=metadata,
+                )
+                ydl_opts["postprocessors"] = postprocessors
 
-            ppa = build_postprocessor_args(
-                needs_recode=needs_recode,
-                use_nvenc=use_nvenc,
-            )
-            if ppa:
-                ydl_opts["postprocessor_args"] = ppa
+                ppa = build_postprocessor_args(
+                    needs_recode=needs_recode,
+                    use_nvenc=use_nvenc,
+                )
+                if ppa:
+                    ydl_opts["postprocessor_args"] = ppa
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 ret = ydl.download([url])
