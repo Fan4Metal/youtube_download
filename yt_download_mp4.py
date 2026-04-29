@@ -1,11 +1,12 @@
+# Скрипт загрузки видео/аудио с YouTube, Vk Video и других сайтов
+# Для запуска из powershell добавить в $PROFILE:
+# function dl { uv run --upgrade "<полный путь до файла скрипта>" $args }
+
 # /// script
 # dependencies = [
 #     "yt-dlp>=2025.12.8",
 # ]
 # ///
-
-# Для запуска из powershell добавить в $PROFILE:
-# function dl { uv run --upgrade "D:\Projects\youtube_download\yt_download_mp4.py" $args }
 
 import argparse
 import os
@@ -196,13 +197,11 @@ def download_video(
         postprocessors = []
 
         if audio_only:
-            postprocessors.append(
-                {
-                    "key": "FFmpegExtractAudio",
-                    "preferredcodec": "mp3",
-                    "preferredquality": str(audio_bitrate),
-                }
-            )
+            postprocessors.append({
+                "key": "FFmpegExtractAudio",
+                "preferredcodec": "mp3",
+                "preferredquality": str(audio_bitrate),
+            })
             if metadata:
                 postprocessors.append({"key": "FFmpegMetadata"})
             return postprocessors
@@ -211,19 +210,15 @@ def download_video(
             postprocessors.append({"key": "FFmpegMetadata"})
 
         if needs_recode:
-            postprocessors.append(
-                {
-                    "key": "FFmpegVideoConvertor",
-                    "preferedformat": "mp4",
-                }
-            )
+            postprocessors.append({
+                "key": "FFmpegVideoConvertor",
+                "preferedformat": "mp4",
+            })
         elif needs_remux:
-            postprocessors.append(
-                {
-                    "key": "FFmpegVideoRemuxer",
-                    "preferedformat": "mp4",
-                }
-            )
+            postprocessors.append({
+                "key": "FFmpegVideoRemuxer",
+                "preferedformat": "mp4",
+            })
 
         return postprocessors
 
